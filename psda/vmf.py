@@ -51,7 +51,7 @@ class LogNormConst:
         self.logrho = fastlogrho.slow
 
 
-    def __call__(self, k = None, logk = None, fast = False, exp_scale = False):
+    def __call__(self, k=None, logk=None, fast=True, exp_scale=False):
         """
         Returns the log normalization constant, omitting a term dependent
         only on the dimensionality, nu.
@@ -67,7 +67,7 @@ class LogNormConst:
         return logCe - k
 
 
-    def rho(self, k = None, logk = None, fast = False):
+    def rho(self, k=None, logk=None, fast=True):
         """
         The norm of the expected value for VMF(nu,k). The expected value is
         monotonic rising, from rho(0) = 0 to rho(inf) = 1. The limit at 0
@@ -94,7 +94,7 @@ class LogNormConst:
         return k
 
 
-    def rhoinv(self, rho, fast=False):
+    def rhoinv(self, rho, fast=True):
         """
         Slower, more accurate inversion of rho using a root finder.
         Except, if fast = True, it just calls rhoinv_fast.
@@ -158,7 +158,7 @@ class VMF:
     """
     Von Mises-Fisher distribution. The parameters are supplied at construction.
     """
-    def __init__(self, mu=None, k = None, logC = None):
+    def __init__(self, mu=None, k=None, logC=None):
         """
         mu: (dim, ): mean direction, must be lengh-normalized.
 
@@ -232,7 +232,7 @@ class VMF:
 
 
     @classmethod
-    def max_likelihood(cls, mean, logC = None):
+    def max_likelihood(cls, mean, logC=None):
         """
         The returns the maximum-likelihood estimate(s) for one or more VMFs, given
         the sufficient stats.
@@ -309,11 +309,13 @@ class VMF:
 
         if np.isscalar(n_or_labels):   # n iid samples from a single distribution
             n = n_or_labels
+            mu = np.squeeze(mu)
+            k = np.squeeze(self.k)
             assert mu.ndim == 1
-            assert np.isscalar(self.k)
-            if self.k==0:
+            assert np.ndim(k) == 0 # np.isscalar(k)
+            if k==0:
                 return sample_uniform(dim,n)
-            X = np.vstack([sample_vmf_canonical_mu(dim,self.k) for i in range(n)])
+            X = np.vstack([sample_vmf_canonical_mu(dim,k) for i in range(n)])
             X = rotate_to_mu(X,mu)
 
         else:                          # index distribution by labels

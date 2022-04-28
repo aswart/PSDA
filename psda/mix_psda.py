@@ -71,10 +71,13 @@ class MixPSDA:
         import h5py
         with h5py.File(fname,'r') as h5:
             w = np.asarray(h5["w"])
-            p_i = np.asarray(h5["pi"])
             w = np.atleast_1d(w)
-            p_i = np.atleast_1d(p_i)
             between = VMF.load_from_h5(h5,"between")
+            if "pi" in h5:
+                p_i = np.asarray(h5["pi"])
+            else:
+                p_i = np.ones(between.mu.shape[0],dtype=np.float)
+            p_i = np.atleast_1d(p_i)
         return cls(p_i,w,between)
 
     # def marg_llh(self, data_sum, count):
@@ -164,7 +167,7 @@ class MixPSDA:
         total = counts.sum()
         psda = psda_init or cls.em_init(means,w0)
         if not quiet:
-            print(f"em init  : 0 B =",psda.b, "W =",psda.w,"mu =",psda.between.mu.ravel()[:6])
+            print(f"em init  : 0 B =",psda.b[:5], "W =",psda.w[:5],"mu =",psda.between.mu.ravel()[:6])
         obj = []
         llh0 = 0
         for i in range(niters):
@@ -174,7 +177,7 @@ class MixPSDA:
 
             impr = llh - llh0; llh0 = llh
             if not quiet:
-                print(f"em iter {i}: {impr}","B =",psda.b, "W =",psda.w,"mu =",psda.between.mu.ravel()[:6])
+                print(f"em iter {i}: {impr}","B =",psda.b[:5], "W =",psda.w[:5],"mu =",psda.between.mu.ravel()[:6])
             obj.append(llh)
         return psda, obj
 
@@ -236,7 +239,9 @@ class MixPSDA:
 
         llh = self.logCw*n + self.logCb*m - post.logCk.sum(axis=-1)
         llh += m*np.log(self.p_i) - log_r.sum(axis=1)
-        assert np.allclose(llh,llh[0]), "Candidate's formula fail!"
+        #assert np.allclose(llh,llh[0]), "Candidate's formula fail!"
+        if not np.allclose(llh,llh[0]):
+            print("Candidate's formula fail!")
         return llh[0]
 
     def em_iter(self, means, counts):
@@ -261,6 +266,14 @@ class MixPSDA:
         y_bar = np.sum(gamma[:,:,None]*y_exp, axis=1)     # m x dim (spk s summed out)
         y_bar /= gamma.sum(axis=1,keepdims=True)          # m x dim
 
+        # Prune collapsed components
+        keep = decompose(y_bar)[0] < 1
+        if not np.all(keep):
+            print(f"Pruning {np.sum(~keep)} of {keep.size} components")
+            y_exp = y_exp[keep]
+            y_bar = y_bar[keep]
+            gamma = gamma[keep]
+
         pi_new = gamma.sum(axis=1)/gamma.sum()            # m
 
         if self.tied_b:
@@ -272,6 +285,10 @@ class MixPSDA:
             b_new, mu_new = decompose(y_bar)
             b_new = np.atleast_1d(b_new)
             b_new = self.logC.rhoinv(b_new)
+
+        if np.any(b_new < 0) or np.any(~np.isfinite(b_new)):
+            stop
+
         between_new = VMF(mu_new, b_new,self.logC)
 
         if self.tied_w:
@@ -316,8 +333,12 @@ class Side:
         self.counts = counts
 
         self.yi1norm2 = np.sum(X**2,axis=1,keepdims=True)*psda.w**2 + X@(2*psda.bmu.T*psda.w) + psda.b**2
+        # check = np.square(psda.bmu[None,:,:] +  psda.w[None,:,None]*X[:,None,:] ).sum(axis=-1)
+        # print("__init__",self.yi1norm2.shape, check.shape)
+        # assert np.allclose(self.yi1norm2, check)
+
         logr1 = counts[:,None]*psda.logCw + psda.logCb + np.log(psda.p_i)
-        logr1 -= psda.logC(self.yi1norm2)
+        logr1 -= psda.logC(np.sqrt(self.yi1norm2))
         self.logr1 = np.logaddexp.reduce(logr1, axis=1)
 
 
@@ -330,11 +351,11 @@ class Side:
         """
 
         yi3norm2 = self.yi1norm2[:,None,:] + rhs.yi1norm2[None,:,:] - self.psda.b[None,None,:]**2
-        yi3norm2 += 2*self.psda.w[None,None,:]*np.sum(self.X[:,None,:]*rhs.X[None,:,:],axis=-1,keepdims=True)
+        yi3norm2 += 2*np.square(self.psda.w)[None,None,:]*np.sum(self.X[:,None,:]*rhs.X[None,:,:],axis=-1,keepdims=True)
 
         logr3  = (self.counts[:,None] + rhs.counts)[:,:,None]*self.psda.logCw[None,None,:]
         logr3 += (self.psda.logCb + np.log(self.psda.p_i))[None,None,:]
-        logr3 -= self.psda.logC(yi3norm2)
+        logr3 -= self.psda.logC(np.sqrt(yi3norm2))
         logr3 = np.logaddexp.reduce(logr3, axis=-1)
 
         return logr3 - self.logr1[:,None] - rhs.logr1
@@ -349,11 +370,16 @@ class Side:
         """
 
         yi3norm2 = self.yi1norm2 + rhs.yi1norm2 - self.psda.b**2
-        yi3norm2 += 2*np.sum(self.X*rhs.X,axis=-1,keepdims=True)*self.psda.w
+        yi3norm2 += 2*np.sum(self.X*rhs.X,axis=-1,keepdims=True)*self.psda.w**2
+
+        # X = self.X+rhs.X# np.vstack((self.X,rhs.X))
+        # check = np.square(self.psda.bmu[None,:,:] +  self.psda.w[None,:,None]*X[:,None,:] ).sum(axis=-1)
+        # print("llr_vector",yi3norm2.shape, check.shape)
+        # assert np.allclose(yi3norm2, check)
 
         logr3  = (self.counts + rhs.counts)[:,None]*self.psda.logCw
         logr3 += (self.psda.logCb + np.log(self.psda.p_i))
-        logr3 -= self.psda.logC(yi3norm2)
+        logr3 -= self.psda.logC(np.sqrt(yi3norm2))
         logr3 = np.logaddexp.reduce(logr3, axis=-1)
 
         return logr3 - self.logr1 - rhs.logr1

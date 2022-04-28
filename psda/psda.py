@@ -94,7 +94,8 @@ class PSDA:
 
 
     def sample(self, speakers, labels):
-        within = VMF(speakers, self.w, self.logC)
+        w = np.ones(speakers.shape[0])*self.w
+        within = VMF(speakers, w, self.logC)
         return within.sample(labels)
 
 
